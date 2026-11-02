@@ -4,3 +4,7 @@ addFilter(r"^gpu-unlock-firmware.*: [WE]: (unstripped-binary-or-object|staticall
 addFilter(r"^gpu-unlock-dkms.*: E: no-binary")
 # Retain the unmodified GPL-2.0 notice required by the source provenance.
 addFilter(r"^gpu-unlock-dkms.*: E: incorrect-fsf-address")
+# kmodtool's akmod/kmod packages intentionally ship no payload of their
+# own: akmod-gpu-unlock carries an embedded source RPM that akmods builds
+# per kernel, and kmod-gpu-unlock is a no-payload metapackage.
+addFilter(r"^(akmod|kmod)-gpu-unlock.*: E: no-binary")

@@ -83,7 +83,7 @@ jobs:
           - image: fedora:43
             setup: dnf install -qy git make xz zstd rpm-build dnf-plugins-core
           - image: fedora:latest
-            setup: dnf install -qy git make xz zstd rpm-build dnf-plugins-core
+            setup: dnf install -qy git make xz zstd rpm-build dnf-plugins-core kmodtool
           - image: archlinux:latest
             setup: pacman -Syu --noconfirm --needed base-devel git zstd
     steps:

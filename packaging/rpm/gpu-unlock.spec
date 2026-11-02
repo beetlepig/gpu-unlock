@@ -27,14 +27,24 @@ Requires: dkms
 Requires(post): dkms
 Requires(preun): dkms
 Requires: gpu-unlock-firmware = %{version}-%{release}
+# DKMS and akmods both manage the same module and boot integration; only
+# one may be installed at a time.
+Conflicts: akmod-gpu-unlock
+Conflicts: kmod-gpu-unlock
 
 %description dkms
 DKMS source for gpu_unlock, loaded ahead of nvidia on every boot. It does
 nothing unless gpu_unlock.targets= is on the kernel command line.
 
+For rpm-ostree hosts (Fedora Silverblue/Kinoite), where DKMS cannot build on
+the live root, install the gpu-unlock-kmod akmod package instead.
+
 %package firmware
 Summary: Locally generated pinned NVIDIA firmware for GPU unlock
 License: LicenseRef-NVIDIA AND GPL-2.0-only
+# Satisfies kmodtool's akmod-gpu-unlock "-common" requirement so the akmod
+# flavor (packaging/rpm/gpu-unlock-kmod.spec) can share this subpackage.
+Provides: gpu-unlock-kmod-common = %{version}
 
 %description firmware
 Firmware assets generated locally from verified upstream inputs.
@@ -58,11 +68,11 @@ make DESTDIR=%{buildroot} ASSETS="$PWD/assets" \
 %license licenses/GPL-2.0.txt licenses/CMP40HX-MIT.txt licenses/NVIDIA-MIT.txt
 %doc %{_docdir}/gpu-unlock
 %{_usrsrc}/gpu-unlock-%{version}
-%{_prefix}/lib/dracut/dracut.conf.d/gpu-unlock.conf
 
 %files firmware
 %license %{_defaultlicensedir}/gpu-unlock-firmware
 %{_prefix}/lib/firmware/gpu-unlock
+%{_prefix}/lib/dracut/dracut.conf.d/00-gpu-unlock.conf
 
 %post dkms
 # Before 1.0.1 the old package kept its DKMS entry on upgrade; drop any

@@ -23,15 +23,16 @@ LICENSES       := licenses/GPL-2.0.txt licenses/CMP40HX-MIT.txt licenses/NVIDIA-
 NV_SOURCE      := NVIDIA-kernel-module-source-$(NV)
 NV_INSTALLER   := NVIDIA-Linux-x86_64-$(NV)-no-compat32.run
 
-TARBALL := $(abspath $(DISTDIR))/gpu-unlock-$(VERSION).tar.xz
-DEBDIR  := $(abspath $(DISTDIR))/deb
-RPMDIR  := $(abspath $(DISTDIR))/rpm
-DEBS    := $(foreach p,dkms firmware,$(DEBDIR)/gpu-unlock-$(p)_$(VERSION)_all.deb)
+TARBALL   := $(abspath $(DISTDIR))/gpu-unlock-$(VERSION).tar.xz
+DEBDIR    := $(abspath $(DISTDIR))/deb
+RPMDIR    := $(abspath $(DISTDIR))/rpm
+AKMODDIR  := $(abspath $(DISTDIR))/rpm-akmod
+DEBS      := $(foreach p,dkms firmware,$(DEBDIR)/gpu-unlock-$(p)_$(VERSION)_all.deb)
 
 .PHONY: all dist inputs firmware assets install-dkms install-firmware \
         install-mkinitcpio install-initramfs-tools install-dracut \
-        install-licenses arch deb rpm install install-arch install-deb install-rpm \
-        test-module test-packages
+        install-licenses arch deb rpm rpm-akmod install install-arch \
+        install-deb install-rpm install-rpm-akmod test-module test-packages
 
 all:
 
@@ -84,7 +85,7 @@ install-initramfs-tools:
 		$(DESTDIR)/usr/share/initramfs-tools/scripts/init-top/gpu-unlock
 
 install-dracut:
-	install -Dm644 packaging/boot/dracut.conf $(DESTDIR)/usr/lib/dracut/dracut.conf.d/gpu-unlock.conf
+	install -Dm644 packaging/boot/dracut.conf $(DESTDIR)/usr/lib/dracut/dracut.conf.d/00-gpu-unlock.conf
 
 install-licenses:
 	install -Dm644 -t $(DESTDIR)$(LICENSEDIR)/$(PKG) $(LICENSES)
@@ -102,7 +103,12 @@ install:
 		case "$$distro" in \
 			arch) target=arch ;; \
 			debian|ubuntu) target=deb ;; \
-			fedora|rhel|centos) target=rpm ;; \
+			fedora|rhel|centos) \
+				if command -v rpm-ostree >/dev/null 2>&1; then \
+					target=rpm-akmod; \
+				else \
+					target=rpm; \
+				fi ;; \
 			*) continue ;; \
 		esac; \
 		echo "Detected $$distro family; running make install-$$target"; \
@@ -150,3 +156,52 @@ test-module:
 
 test-packages:
 	INPUTS=$(INPUTS) tests/docker.sh package
+
+# akmod/kmod flavor: kmodtool and akmods build and sign gpu_unlock for every
+# installed kernel instead of DKMS, for rpm-ostree hosts (Fedora
+# Silverblue/Kinoite) where DKMS cannot build on the live root. The spec's
+# self-embedding akmod_install step needs its own copy at
+# SPECS/<name>.spec, so unlike rpm above the spec is copied in, not built
+# from its path in the repo.
+rpm-akmod: dist
+	rm -rf $(AKMODDIR)
+	mkdir -p $(AKMODDIR)/SOURCES $(AKMODDIR)/SPECS
+	cp $(TARBALL) $(AKMODDIR)/SOURCES/
+	cp packaging/rpm/gpu-unlock-kmod.spec $(AKMODDIR)/SPECS/
+	rpmbuild -ba --define "_topdir $(AKMODDIR)" $(AKMODDIR)/SPECS/gpu-unlock-kmod.spec
+
+# gpu-unlock-firmware still comes from the main spec (it generates the
+# firmware), so this also needs the pinned NVIDIA inputs; the akmod package
+# itself only needs the akmod/kmodtool toolchain and no network access.
+# rpm-ostree hosts have no dnf at all: their base image already ships
+# rpm-build, kmodtool, kernel-devel and a compiler, since akmods itself
+# needs them to rebuild kmods during package layering.
+install-rpm-akmod:
+	@if command -v dnf >/dev/null 2>&1; then \
+		sudo dnf install -y rpm-build kmodtool; \
+		sudo dnf builddep -y packaging/rpm/gpu-unlock.spec packaging/rpm/gpu-unlock-kmod.spec; \
+	fi
+	$(MAKE) rpm rpm-akmod
+	@set -eu; \
+	rpms="$(RPMDIR)/RPMS/noarch/gpu-unlock-firmware-$(VERSION)-*.noarch.rpm \
+	      $(AKMODDIR)/RPMS/*/akmod-gpu-unlock-$(VERSION)-*.rpm"; \
+	if command -v rpm-ostree >/dev/null 2>&1; then \
+		layered="$$(rpm-ostree status --json | jq -r '.deployments[0]."requested-local-packages"[]? // empty')"; \
+		replace_flags=""; \
+		for f in $$rpms; do \
+			name="$$(rpm -qp --qf '%{NAME}' "$$f")"; \
+			if echo "$$layered" | grep -q "^$$name-[0-9]"; then \
+				echo "$$name already layered; will reinstall with the freshly built package."; \
+				replace_flags="$$replace_flags --uninstall=$$name"; \
+			fi; \
+		done; \
+		sudo rpm-ostree install --cache-only $$replace_flags $$rpms; \
+		if rpm-ostree initramfs | grep -q 'regeneration: enabled'; then \
+			echo "Initramfs regeneration already enabled; skipping."; \
+		else \
+			sudo rpm-ostree initramfs --enable; \
+		fi; \
+		echo "Reboot to finish, then add gpu_unlock.targets=all to the kernel command line."; \
+	else \
+		sudo dnf install -y $$rpms; \
+	fi

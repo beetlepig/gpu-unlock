@@ -14,9 +14,10 @@ debian|ubuntu)
 	make deb INPUTS="$INPUTS"
 	ls build/deb/*.deb ;;
 fedora)
-	dnf builddep -qy packaging/rpm/gpu-unlock.spec
+	dnf builddep -qy packaging/rpm/gpu-unlock.spec packaging/rpm/gpu-unlock-kmod.spec
 	make rpm INPUTS="$INPUTS"
-	ls build/rpm/RPMS/noarch/*.rpm ;;
+	make rpm-akmod
+	ls build/rpm/RPMS/noarch/*.rpm build/rpm-akmod/RPMS/*/*.rpm ;;
 arch)
 	# makepkg refuses to run as root.
 	useradd -m builder

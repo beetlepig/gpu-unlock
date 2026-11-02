@@ -6,7 +6,7 @@ set -eu
 version=$(cat VERSION)
 src=/usr/src/gpu-unlock-$version
 fw=/usr/lib/firmware/gpu-unlock/610.43.03
-dracut=/usr/lib/dracut/dracut.conf.d/gpu-unlock.conf
+dracut=/usr/lib/dracut/dracut.conf.d/00-gpu-unlock.conf
 . /etc/os-release
 case "$ID" in
 debian|ubuntu)
@@ -16,7 +16,15 @@ debian|ubuntu)
 fedora)
 	install="dnf install -qy build/rpm/RPMS/noarch/*.rpm"
 	remove="dnf remove -qy"
-	boot=$dracut ;;
+	boot=$dracut
+	# gpu-unlock-kmod.spec's Version must track VERSION, and the DKMS and
+	# akmod/kmod flavors must stay mutually exclusive: both would install
+	# gpu_unlock.ko for the running kernel otherwise.
+	grep -q "^Version:        $version\$" packaging/rpm/gpu-unlock-kmod.spec
+	grep -q '^Conflicts: akmod-gpu-unlock$' packaging/rpm/gpu-unlock.spec
+	grep -q '^Conflicts: kmod-gpu-unlock$' packaging/rpm/gpu-unlock.spec
+	grep -q '^Provides: gpu-unlock-kmod-common = %{version}$' packaging/rpm/gpu-unlock.spec
+	grep -q 'gpu-unlock-firmware' packaging/rpm/gpu-unlock-kmod.spec ;;
 arch)
 	install="pacman -U --noconfirm packaging/arch/*.pkg.tar.zst"
 	remove="pacman -Rns --noconfirm"

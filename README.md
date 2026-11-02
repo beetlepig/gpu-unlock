@@ -106,6 +106,46 @@ in `/etc/default/grub`, then run `sudo update-grub`.
 - **UKI / generated entries:** add it to `/etc/kernel/cmdline` and regenerate
 your boot images/entries (e.g. `sudo mkinitcpio -P` for mkinitcpio UKIs).
 
+Fedora Silverblue/Kinoite or any other rpm-ostree host installs differently;
+see "Secure Boot and rpm-ostree" below.
+
+## Secure Boot and rpm-ostree (Fedora Silverblue/Kinoite)
+
+`gpu-unlock-dkms` needs a compiler and kernel headers on the live root to
+rebuild the module on every kernel update, which an rpm-ostree host's
+immutable `/usr` does not allow. Install the akmod flavor instead: like
+RPM Fusion's own `akmod-nvidia`, `akmods` builds and signs `gpu_unlock` for
+every installed kernel as part of the package-layering transaction, with no
+live rebuild needed.
+
+Secure Boot still has to trust the result, so a Machine Owner Key (MOK) must
+be enrolled for akmods-signed modules. If you already run `akmod-nvidia`
+from RPM Fusion you have one; otherwise set one up first with
+[CheariX/silverblue-akmods-keys](https://github.com/CheariX/silverblue-akmods-keys).
+
+```sh
+git clone https://github.com/Zagitta/gpu-unlock
+cd gpu-unlock
+make install-rpm-akmod
+sudo rpm-ostree kargs --append="gpu_unlock.targets=all"
+```
+
+`make install-rpm-akmod` layers `akmod-gpu-unlock` and `gpu-unlock-firmware`
+(it conflicts with `gpu-unlock-dkms`; install only one), then runs
+`rpm-ostree initramfs --enable`. That step is required and specific to this
+module: gpu_unlock has to run from the initramfs before nvidia binds a card
+(see "Boot flow and opt-in" below), and rpm-ostree does not regenerate the
+initramfs on package layering unless this is turned on first. It is a
+one-time, persistent opt-in; later layering keeps regenerating the
+initramfs automatically from then on.
+
+rpm-ostree stacks pending changes onto the same deployment, so the layered
+packages, the regenerated initramfs, and the `kargs --append` above all take
+effect after a single reboot. Use `rpm-ostree kargs` rather than grubby or
+`/etc/default/grub`, which Kinoite does not read. Check the result the same
+way as any other install, with the `journalctl`/`lspci` commands further
+down.
+
 # FAQ
 
 - Q: Do you have a website/coin/installer?  
@@ -128,25 +168,29 @@ A: Please consider [donating](#support-me) so I can purchase more GPUs <3
 
 Every build downloads the NVIDIA/CachyOS inputs over HTTPS and generates
 firmware only in the build directory and the binary package. All three formats install through the same `make install-*`
-targets. Packages are built from the working tree, uncommitted changes included.
+targets; RPM has two spec variants, DKMS and akmod (see "Secure Boot and
+rpm-ostree" above). Packages are built from the working tree, uncommitted
+changes included.
 
 Build, install build dependencies, and install the packages in one step
 (asks for your sudo password):
 
 ```sh
-make install        # detect the distribution and select an installer
-make install-arch   # makepkg -sif
-make install-deb    # apt-get build-dep, dpkg-buildpackage, apt-get install
-make install-rpm    # dnf builddep, rpmbuild, dnf install
+make install            # detect the distribution and select an installer
+make install-arch       # makepkg -sif
+make install-deb        # apt-get build-dep, dpkg-buildpackage, apt-get install
+make install-rpm        # dnf builddep, rpmbuild, dnf install
+make install-rpm-akmod  # dnf builddep, rpmbuild, rpm-ostree/dnf install, enable initramfs
 ```
 
 `make install` uses `/etc/os-release` (`ID`, then `ID_LIKE`) to detect Arch,
 Debian/Ubuntu, or Fedora/RHEL/CentOS families. The RPM installer requires DNF.
 For other distributions, select a compatible explicit target above.
 
-`make arch`, `make deb` and `make rpm` only build. Debian and RPM packages go
-to `build/deb` and `build/rpm`. The NVIDIA inputs are cached in
-`~/.cache/gpu-unlock/inputs` (`make inputs`; override with `INPUTS=`).
+`make arch`, `make deb`, `make rpm` and `make rpm-akmod` only build. Debian
+and RPM packages go to `build/deb`, `build/rpm` and `build/rpm-akmod`. The
+NVIDIA inputs are cached in `~/.cache/gpu-unlock/inputs` (`make inputs`;
+override with `INPUTS=`).
 `dpkg-buildpackage` itself never uses the network, so a clean-chroot build (sbuild or
 pbuilder) needs `GPU_UNLOCK_INPUTS` pointing at that cache.
 The `make dist` archive, the Debian source package and the `.nosrc.rpm`
@@ -173,12 +217,18 @@ Images are rebuilt on install. mkinitcpio ignores drop-ins for an image
 built with `-c <config>` or a preset `_config`; put `gpu_unlock` right
 before `nvidia` in that config's `MODULES` yourself.
 - **initramfs-tools:** `/usr/share/initramfs-tools/modules.d/gpu-unlock.conf`.
-- **dracut:** `/usr/lib/dracut/dracut.conf.d/gpu-unlock.conf`.
+- **dracut:** `/usr/lib/dracut/dracut.conf.d/00-gpu-unlock.conf`, named to sort before
+  any drop-in that force-loads `nvidia` into the initramfs (e.g. Bazzite's
+  `99-nvidia.conf`): dracut appends `force_drivers+=` in filename order, so a
+  later name would load `gpu_unlock` after `nvidia` has already bound the card.
 
 With initramfs-tools and dracut, the module is built for every installed
 kernel that has headers, and those kernels' images are rebuilt on install
 and again on removal. Kernels installed later get the module and a new
-image from the kernel's own install hooks.
+image from the kernel's own install hooks. On rpm-ostree hosts this rebuild
+only happens once `rpm-ostree initramfs --enable` has been turned on (see
+"Secure Boot and rpm-ostree" above); `make install-rpm-akmod` does this for
+you.
 
 There is no `softdep nvidia pre:` rule: kmod honours only the first
 `softdep nvidia` line it reads, so other packages' rules (`nvidia-utils`,
